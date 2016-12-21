@@ -13,6 +13,7 @@ from pymc3.distributions import Binomial, Normal, Bernoulli, Categorical
 from numpy.testing import assert_array_almost_equal
 import numpy as np
 from tqdm import tqdm
+from scipy import stats
 
 
 class TestStepMethods(object):  # yield test doesn't work subclassing unittest.TestCase
@@ -238,3 +239,36 @@ class TestAssignStepMethods(unittest.TestCase):
             Binomial('x', 10, 0.5)
             steps = assign_step_methods(model, [])
         self.assertIsInstance(steps, Metropolis)
+
+
+class TestSampleEstimates(SeededTest):
+    def test_parameter_estimate(self):
+        alpha_true, sigma_true = 1, 0.5
+        beta_true = np.array([1, 2.5])
+
+        size = 100
+
+        X1 = np.random.randn(size)
+        X2 = np.random.randn(size) * 0.2
+        Y = alpha_true + beta_true[0] * X1 + beta_true[1] * X2 + np.random.randn(size) * sigma_true
+
+        with Model() as model:
+            alpha = Normal('alpha', mu=0, sd=10)
+            beta = Normal('beta', mu=0, sd=10, shape=2)
+            sigma = Uniform('sigma', lower=0.0, upper=1.0)
+            mu = alpha + beta[0] * X1 + beta[1] * X2
+            Y_obs = Normal('Y_obs', mu=mu, sd=sigma, observed=Y)
+
+            for step_method in (NUTS(), Metropolis(),
+                                [Slice([alpha, sigma]), Metropolis([beta])]):
+                trace = sample(1000, step=step_method, progressbar=False)
+
+                assert np.isclose(np.median(trace.beta, 0), beta_true, rtol=0.1).all()
+                assert np.isclose(np.median(trace.alpha), alpha_true, rtol=0.1)
+                assert np.isclose(np.median(trace.sigma), sigma_true, rtol=0.1)
+                _, test_normal = stats.kstest(trace.alpha, 'norm', alternative='greater')
+                _, test_normal_beta = stats.kstest(trace.beta[0], 'norm', alternative='greater')
+                _, test_uniform = stats.kstest(trace.sigma, 'uniform', alternative='greater')
+                np.testing.assert_array_almost_equal(np.median(test_normal), 4.9960036108132044e-15, decimal=2)
+                np.testing.assert_array_almost_equal(np.median(test_uniform), 0.0, decimal = 1)
+                np.testing.assert_array_almost_equal(np.median(test_normal_beta), 0.26569687803760034, decimal = 1)
